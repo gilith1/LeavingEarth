@@ -4,36 +4,118 @@ import argparse
 import math
 import sys
 
-ROCKETS = [("Juno", 1, 4, 1), ("Atlas", 4, 27, 5), ("Proton", 6, 70, 12), ("Soyuz", 9, 80, 8), ("Saturn", 20, 200, 15)]
+class Thruster(object):
+    def __init__(self, name, mass, thrust, price, ion=False):
+        self.name = name
+        self.mass = mass
+        self.thrust = thrust
+        self.price = price
+        self.ion = ion
+
+    def getName(self):
+        return self.name
+
+    def getThrust(self, duration=0):
+        return self.thrust
+
+    def getMass(self):
+        return self.mass
+
+    def getPrice(self):
+        return self.price
+
+    def isIon(self):
+        return self.ion
+
+class Juno(Thruster):
+    def __init__(self):
+        super().__init__("Juno", 1, 4, 1)
+
+class Atlas(Thruster):
+    def __init__(self):
+        super().__init__("Atlas", 4, 27, 5)
+
+class Proton(Thruster):
+    def __init__(self):
+        super().__init__("Proton", 6, 70, 12)
+
+class Soyuz(Thruster):
+    def __init__(self):
+        super().__init__("Soyuz", 9, 80, 8)
+
+class Saturn(Thruster):
+    def __init__(self):
+        super().__init__("Saturn", 20, 200, 15)
+
+class IonThruster(Thruster):
+    def __init__(self):
+        super().__init__("Ion Thruster", 1, 5, 10, True)
+
+    def getThrust(self, duration=0):
+        return self.thrust * duration
+
+THRUSTERS = [Juno(), Atlas(), Proton(), Soyuz(), Saturn(), IonThruster()]
 
 class Stage(object):
-    def __init__(self, difficulty, payload, thrusters=[]):
+    def __init__(self, difficulty, payload, upperStage=None, duration=0, thrusters=[]):
         self.difficulty = difficulty
         self.payload = payload
+        self.upperStage = upperStage
+        self.duration = duration
         self.thrusters = thrusters
 
     def addThrusters(self, thrusters):
         self.thrusters += thrusters
 
     def getMass(self):
-        return self.payload + self.getThrustersMass()
+        mass = self.payload + self.getThrustersMass()
+        if self.upperStage:
+            mass += self.upperStage.getMass()
+        return mass
 
     def getThrustersMass(self):
         result = 0
         for thruster in self.thrusters:
-            result += thruster[1]
+            result += thruster.getMass()
         return result
 
     def getCost(self):
         cost = 0
         for thruster in self.thrusters:
-            cost += thruster[3]
+            cost += thruster.getPrice()
         return cost
+
+    def getTotalCost(self):
+        if self.upperStage:
+            return self.getCost() + self.upperStage.getTotalCost()
+        else:
+            return self.getCost()
+
+    def getIonThrust(self, duration):
+        thrust = 0
+        for thruster in self.thrusters:
+            if thruster.isIon():
+                thrust += thruster.getThrust(duration)
+        if self.upperStage:
+            thrust += self.upperStage.getIonThrust(duration)
+        return thrust
+
+    def getIonThrusterCount(self):
+        count = 0
+        for thruster in self.thrusters:
+            if thruster.isIon():
+                count += 1
+        if self.upperStage:
+            count += self.upperStage.getIonThrusterCount()
+        return count
 
     def getThrust(self):
         thrust = 0
         for thruster in self.thrusters:
-            thrust += thruster[2]
+            if not thruster.isIon():
+                thrust += thruster.getThrust(self.duration)
+        if self.duration > 0:
+            thrust += self.getIonThrust(self.duration)
         return thrust
 
     def getUnusedPayload(self):
@@ -42,35 +124,53 @@ class Stage(object):
     def thrustersToString(self):
         thrusters = {}
         for thruster in self.thrusters:
-            name = thruster[0]
-            if name in thrusters:
-                thrusters[name] += 1
+            if thruster in thrusters:
+                thrusters[thruster] += 1
             else:
-                thrusters[name] = 1
+                thrusters[thruster] = 1
         result=""
-        for name in thrusters.keys():
-            result += "{} {} ".format(thrusters[name], name)
+        for thruster in thrusters.keys():
+            result += "{} {} ".format(thrusters[thruster], thruster.getName())
+
+        if self.duration > 0 and self.upperStage:
+            ionsCount = self.upperStage.getIonThrusterCount()
+            if ionsCount > 0:
+                result += "(+ {} Ion Thruster) ".format(ionsCount)
+        
         return result
 
     def __repr__(self):
         return self.__str__()
 
     def __str__(self):
-        return "Difficulty:{:2} Payload:{:2} Total mass:{:2} Cost:{} {}".format(self.difficulty, self.payload, self.getMass(), self.getCost(), self.thrustersToString())
+        payload = self.payload
+        if self.upperStage:
+            payload += self.upperStage.getMass()
+        return "Difficulty:{:2} Payload:{:2} Total mass:{:2} Cost:{} {}{}".format(self.difficulty, payload, self.getMass(), self.getCost(), self.thrustersToString(), ("duration:{}Y".format(self.duration) if self.duration else ""))
 
-def selectRockets(difficulty, payload, cheapest=True, max_mass=1000000):
+def selectRockets(difficulty, payload, upperStage=None, cheapest=True, duration=0, max_mass=1000000):
     results = []
-    for rocket in ROCKETS:
-        (name, mass, thrust, price) = rocket
+    ionThrust = 0
+    totalPayload = payload
+    if upperStage:
+        ionThrust = upperStage.getIonThrust(duration)
+        totalPayload += upperStage.getMass()
+        totalPayload -= ionThrust / difficulty
+        if totalPayload <= 0:
+            return Stage(difficulty, payload, upperStage, duration)
+
+    for thruster in THRUSTERS:
+        thrust = thruster.getThrust(duration)
+        mass = thruster.getMass()
         thrust_left = thrust - difficulty * mass
         if thrust_left <= 0 or mass > max_mass:
             continue
-        rocket_count = math.ceil(payload * difficulty / thrust_left)
-        stage = Stage(difficulty, payload, (rocket,)*rocket_count)
-        if rocket_count > 1 and stage.getUnusedPayload() >= 1: # try to replace last rocket with something lighter/cheaper
-            stage1 = Stage(difficulty, payload, (rocket,) * (rocket_count-1))
+        thruster_count = math.ceil(totalPayload * difficulty / thrust_left)
+        stage = Stage(difficulty, payload, upperStage, duration, [thruster,]*thruster_count)
+        if thruster_count > 1 and stage.getUnusedPayload() >= 1: # try to replace last rocket with something lighter/cheaper
+            stage1 = Stage(difficulty, payload, upperStage, duration, [thruster,] * (thruster_count-1))
             stage2_payload = - (stage1.getUnusedPayload())
-            stage2 = selectRockets(difficulty, stage2_payload, cheapest, mass)
+            stage2 = selectRockets(difficulty, stage2_payload, None, cheapest, duration, mass)
             if stage2.getThrustersMass() < mass:
                 stage1.addThrusters(stage2.thrusters)
                 stage = stage1
@@ -100,19 +200,25 @@ def selectBest(stages, cheapest=False):
                 result = stage
     return result
 
-def planRoute(payload, *difficulties, cheapest=True):
+def planRoute(payload, difficulties, durations, cheapest=True):
     total_cost = 0
-    for difficulty in difficulties[::-1]:
-        stage=selectRockets(difficulty, payload, cheapest)
+    stage = None
+    for i in range(len(difficulties)-1, -1, -1):
+        difficulty = difficulties[i]
+        if durations and len(durations) > i:
+            duration = durations[i]
+        else:
+            duration = 0
+        stage=selectRockets(difficulty, payload, stage, cheapest, duration)
+        payload = 0
         print(stage)
-        payload = stage.getMass()
-        total_cost += stage.getCost()
-    print("Total mission cost:", total_cost)
+    print("Total mission cost:", stage.getTotalCost())
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('payload', type=int, help='Payload mass')
     parser.add_argument('difficulty', type=int, nargs="+", help='Maneuver difficulty')
+    parser.add_argument('--duration', type=int, nargs="+", help='Maneuver duration')
     parser.add_argument('--light', dest="cheapest", default=True, action="store_false", help='Optimize mass')
     args = parser.parse_args()
-    planRoute(args.payload, *args.difficulty, cheapest=args.cheapest)
+    planRoute(args.payload, args.difficulty, args.duration, cheapest=args.cheapest)
